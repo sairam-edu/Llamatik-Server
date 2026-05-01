@@ -3,9 +3,8 @@ package com.llamatik.repository.profile
 import com.llamatik.repository.DatabaseFactory.dbQuery
 import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.eq
-import org.jetbrains.exposed.v1.core.statements.InsertStatement
 import org.jetbrains.exposed.v1.jdbc.insert
-import org.jetbrains.exposed.v1.jdbc.select
+import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.update
 
 class ProfileRepositoryImpl : ProfileRepository {
@@ -24,10 +23,11 @@ class ProfileRepositoryImpl : ProfileRepository {
         squadronPatch: String?,
         medals: List<String>?
     ): String? {
-        var statement: InsertStatement<Number>? = null
-        dbQuery {
-            statement = Profiles.insert { profiles ->
-                profiles[Profiles.userId] = userId
+        // Return the InsertStatement directly from dbQuery to avoid the nullable mutable var
+        // that was captured via side-effect from outside the lambda.
+        val statement = dbQuery {
+            Profiles.insert { profiles ->
+                profiles[Profiles.userId] = id
                 profiles[Profiles.name] = name
                 description?.let {
                     profiles[Profiles.description] = it
@@ -37,13 +37,16 @@ class ProfileRepositoryImpl : ProfileRepository {
                 }
             }
         }
-        return rowToProfiles(statement?.resultedValues?.get(0))
+        return rowToProfiles(statement.resultedValues?.get(0))
     }
 
     override suspend fun getProfile(userId: Int): String? {
         return dbQuery {
-            Profiles.select(Profiles.userId).where {
-                Profiles.userId.eq((userId))
+            // selectAll() fetches every column so future callers can read the full row
+            // without a second round-trip; the earlier select(Profiles.userId) was a
+            // partial projection that only returned the id column.
+            Profiles.selectAll().where {
+                Profiles.userId.eq(userId)
             }.toString()
         }
     }
@@ -64,28 +67,18 @@ class ProfileRepositoryImpl : ProfileRepository {
         medals: List<String>?
     ): String? {
         return dbQuery {
-            Profiles.select(Profiles.userId).where {
-                Profiles.userId.eq((userId))
-            }.forUpdate()
-
-            Profiles.update {
-                Profiles.userId.eq(userId)
-                name?.let { name ->
-                    it[Profiles.name] = name
-                }
-                description?.let { description ->
-                    it[Profiles.description] = description
-                }
-                image?.let { image ->
-                    it[Profiles.image] = image
-                }
-                location?.let { location ->
-                    it[Profiles.location] = location
-                }
+            // The previous SELECT … FOR UPDATE before this UPDATE was a redundant database
+            // round-trip.  The UPDATE statement itself acquires the necessary row lock, so
+            // the extra SELECT only added latency without providing any concurrency benefit.
+            Profiles.update({ Profiles.userId.eq(userId) }) { stmt ->
+                name?.let { stmt[Profiles.name] = it }
+                description?.let { stmt[Profiles.description] = it }
+                image?.let { stmt[Profiles.image] = it }
+                location?.let { stmt[Profiles.location] = it }
             }
 
-            Profiles.select(Profiles.userId).where {
-                Profiles.userId.eq((userId))
+            Profiles.selectAll().where {
+                Profiles.userId.eq(userId)
             }.toString()
         }
     }

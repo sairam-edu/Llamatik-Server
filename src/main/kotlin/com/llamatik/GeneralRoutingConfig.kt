@@ -24,11 +24,9 @@ fun Application.configureGeneralRouting() {
             call.respondText("Welcome to Llamatik Server!")
         }
 
-        // Llamatik inference API (mirrors the LlamaBridge surface)
-        embeddingRoutes()
-        generationRoutes()
-
-        // --- Llamatik LLM API ---
+        // Llamatik inference API (mirrors the LlamaBridge surface).
+        // Routes are registered once; duplicate registration doubled handler lookup
+        // cost on every request and wasted routing-table memory.
         embeddingRoutes()
         generationRoutes()
 

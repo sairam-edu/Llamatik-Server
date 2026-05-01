@@ -10,7 +10,10 @@ import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.SchemaUtils
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 
-private const val MAX_POOL_SIZE = 3
+// A pool size of 3 caused connection contention under any concurrent load because each
+// in-flight database operation needs its own connection.  10 is a more typical starting
+// point; tune upward if profiling shows queued connection-acquisition waits.
+private const val MAX_POOL_SIZE = 10
 
 object DatabaseFactory {
     fun init() {

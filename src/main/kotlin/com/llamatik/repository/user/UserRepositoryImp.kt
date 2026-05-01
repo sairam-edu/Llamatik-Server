@@ -4,9 +4,8 @@ import com.llamatik.models.DatabaseUser
 import com.llamatik.repository.DatabaseFactory.dbQuery
 import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.eq
-import org.jetbrains.exposed.v1.core.statements.InsertStatement
 import org.jetbrains.exposed.v1.jdbc.insert
-import org.jetbrains.exposed.v1.jdbc.select
+import org.jetbrains.exposed.v1.jdbc.selectAll
 
 class UserRepositoryImp : UserRepository {
     override suspend fun addUser(
@@ -14,25 +13,33 @@ class UserRepositoryImp : UserRepository {
         name: String,
         passwordHash: String
     ): DatabaseUser? {
-        var statement: InsertStatement<Number>? = null // 1
-        dbQuery {
-            statement = Users.insert { user ->
+        // Previously used a nullable `var` captured from outside the lambda, which forced
+        // an extra heap allocation and relied on a side-effect across a suspend boundary.
+        // Returning the InsertStatement directly from dbQuery is both safer and avoids the
+        // extra allocation.
+        val statement = dbQuery {
+            Users.insert { user ->
                 user[Users.email] = email
                 user[Users.name] = name
                 user[Users.passwordHash] = passwordHash
             }
         }
 
-        return rowToUser(statement?.resultedValues?.get(0))
+        return rowToUser(statement.resultedValues?.get(0))
     }
 
     override suspend fun findUser(userId: Int) = dbQuery {
-        Users.select(Users.userId).where { Users.userId.eq(userId) }
+        // select(Users.userId) only projected the primary-key column, causing rowToUser to
+        // throw when it accessed email/name/passwordHash.  selectAll() fetches every column
+        // once, eliminating the partial-projection bug and the need for a follow-up query.
+        Users.selectAll().where { Users.userId.eq(userId) }
             .map { rowToUser(it) }.singleOrNull()
     }
 
     override suspend fun findUserByEmail(email: String) = dbQuery {
-        Users.select(Users.email).where { Users.email.eq(email) }
+        // Same fix as findUser: select(Users.email) was a partial projection that crashed
+        // rowToUser.  selectAll() is correct here because all columns are needed.
+        Users.selectAll().where { Users.email.eq(email) }
             .map { rowToUser(it) }.singleOrNull()
     }
 
