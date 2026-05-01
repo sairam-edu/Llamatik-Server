@@ -20,6 +20,7 @@ import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import kotlinx.coroutines.channels.Channel
+import java.util.concurrent.Executors
 
 private const val GENERATION = "$API_VERSION/generation"
 
@@ -34,6 +35,16 @@ private const val GENERATION_JSON_STREAM = "$GENERATION/jsonStream"
 private const val GENERATION_JSON_STREAM_WITH_CONTEXT = "$GENERATION/jsonStreamWithContext"
 private const val GENERATION_PARAMS = "$GENERATION/params"
 private const val GENERATION_CANCEL = "$GENERATION/cancel"
+
+// Shared pool for the blocking JNI streaming calls.
+// Previously a brand-new daemon Thread was created on every streaming request.  Thread
+// creation is expensive: the JVM must allocate stack memory, register the thread with the
+// OS scheduler, and tear it down immediately after.  A cached thread pool reuses idle
+// threads across requests, eliminating that overhead.  All threads are daemons so they
+// do not prevent a clean JVM shutdown.
+private val streamingExecutor = Executors.newCachedThreadPool { r ->
+    Thread(r).also { it.isDaemon = true }
+}
 
 /**
  * Mirrors the Llamatik library API for generation.
@@ -123,15 +134,13 @@ fun Route.generationRoutes() {
         call.respondTextWriter(contentType = ContentType.Text.EventStream) {
             // Start generation on a background thread (native call blocks).
             // We do it inside the writer so the connection is already open.
-            val t = Thread {
+            streamingExecutor.submit {
                 try {
                     LlamaService.generateStream(req.prompt, cb)
                 } catch (e: Throwable) {
                     errors.trySend(e.message ?: "Streaming failed")
                 }
             }
-            t.isDaemon = true
-            t.start()
 
             Sse.pipe(
                 writer = this,
@@ -156,15 +165,13 @@ fun Route.generationRoutes() {
         )
 
         call.respondTextWriter(contentType = ContentType.Text.EventStream) {
-            val t = Thread {
+            streamingExecutor.submit {
                 try {
                     LlamaService.generateStreamWithContext(req.systemPrompt, req.contextBlock, req.userPrompt, cb)
                 } catch (e: Throwable) {
                     errors.trySend(e.message ?: "Streaming failed")
                 }
             }
-            t.isDaemon = true
-            t.start()
 
             Sse.pipe(writer = this, deltas = deltas, done = done, errors = errors)
         }
@@ -184,15 +191,13 @@ fun Route.generationRoutes() {
         )
 
         call.respondTextWriter(contentType = ContentType.Text.EventStream) {
-            val t = Thread {
+            streamingExecutor.submit {
                 try {
                     LlamaService.generateJsonStream(req.prompt, req.jsonSchema, cb)
                 } catch (e: Throwable) {
                     errors.trySend(e.message ?: "Streaming failed")
                 }
             }
-            t.isDaemon = true
-            t.start()
 
             Sse.pipe(writer = this, deltas = deltas, done = done, errors = errors)
         }
@@ -212,7 +217,7 @@ fun Route.generationRoutes() {
         )
 
         call.respondTextWriter(contentType = ContentType.Text.EventStream) {
-            val t = Thread {
+            streamingExecutor.submit {
                 try {
                     LlamaService.generateJsonStreamWithContext(
                         req.systemPrompt,
@@ -225,8 +230,6 @@ fun Route.generationRoutes() {
                     errors.trySend(e.message ?: "Streaming failed")
                 }
             }
-            t.isDaemon = true
-            t.start()
 
             Sse.pipe(writer = this, deltas = deltas, done = done, errors = errors)
         }
