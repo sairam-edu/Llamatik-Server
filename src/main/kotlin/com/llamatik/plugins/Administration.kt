@@ -5,7 +5,7 @@ import io.ktor.server.application.install
 import io.ktor.server.engine.ShutDownUrl
 
 fun Application.configureAdministration() {
-    if (!System.getenv("ENABLE_SHUTDOWN_URL").equals("true", ignoreCase = true)) {
+    if (System.getenv("ENABLE_SHUTDOWN_URL")?.equals("true", ignoreCase = true) != true) {
         return
     }
 
